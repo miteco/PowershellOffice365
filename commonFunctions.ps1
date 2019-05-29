@@ -4,7 +4,7 @@
     Desc:   Colección de Funciones para el funcionamiento de la aplicación de Gestión de Azure AD
 #>
 
-function exportUsersCSV {
+function ExportUsersCSV {
     # Desc: Exporta a un fichero CSV la información de los usuarios dados de alta en Azure AD
     
     $file=$env:userprofile + "\Documents\azuread_accounts"+$(get-date -f yyMMddhhmmss)+".csv"
@@ -15,14 +15,14 @@ function exportUsersCSV {
         DisplayName,GivenName,Surname,MailNickName,Department,JobTitle,TelephoneNumber,PhysicalDeliveryOfficeName,StreetAddress,PostalCode,City,State,Country, `
         Mail,UserType,CreationType,AccountEnabled,`
         @{name='Licensed';expression={if($_.AssignedLicenses){$TRUE}else{$False}}},`
-        @{name='Plan';expression={if($_.AssignedPlans){$TRUE}else{$False}}} | export-csv $file -NoTypeInformation -Encoding UTF8 -Delimiter ";" -Verbose        
+        @{name='Plan';expression={if($_.AssignedPlans){$TRUE}else{$False}}},`
+        PreferredLanguage, UsageLocation | export-csv $file -NoTypeInformation -Encoding UTF8 -Delimiter ";" -Verbose        
 
     Write-Host $file
     Write-Host ""
 
     Read-Host -Prompt 'Pulse Intro para continuar' 
 }
-
 
 Function FindUserByDNI($employeeId){
     
@@ -37,7 +37,7 @@ Function FindUserByDNI($employeeId){
     if($employeeId -ne $null -and $employeeId -ne ""){
         
         # Puede que haya más de un usuario con el mismo DNI (no debería). Recuepramos la info como colección de usuarios y la recorremos.
-        $userList = (Get-AzureADUser -All $True | Where-Object { $_.extensionProperty.employeeId -eq $EmployeeId } | Select-Object *)        
+        $userList = (Get-AzureADUser -All $True | Where-Object { $_.extensionProperty.employeeId -eq $EmployeeId } | Select *)        
 
         if ($userList -ne $null){
             ForEach ($user in $userList){
@@ -60,7 +60,6 @@ Function FindUserByDNI($employeeId){
     Read-Host -Prompt 'Pulse Intro para continuar'
 }
 
-
 Function FindUserByDistinguisedName($dn){
     # Desc: La función recupera la información para el idnetificador único de usario buscado. 
     #       El Identificado puede llegar como parametro o en caso contrario será la propia función la que los solicite
@@ -69,20 +68,22 @@ Function FindUserByDistinguisedName($dn){
     if($dn -eq "" -or $dn -eq $null ) {
         $dn = Read-Host -Prompt "Introduzca el Identificador que esta buscando "
     }
-
-    $user = (Get-AzureADUser -ObjectId $dn )
     
-    Write-Host ""
+    try {
+        $user = (Get-AzureADUser -ObjectId $dn )
+    
+            if($dn -ne $null -and $dn -ne ""){        
+                # De momento lo pintamos como Json aunque puede cambiar en un futuro cuando se concreten los requerimientos
+                Write-Host $user.ToJson()        
+            } else {
+                Write-Warning "No ha introducido un Identificador valido"
+            }
+            
+        } catch{
+            Write-Warning "No se ha encontrado el Identificador especificado "
+        }   
 
-    if($dn -ne $null -and $dn -ne ""){        
-        # De momento lo pintamos como Json aunque puede cambiar en un futuro cuando se concreten los requerimientos
-        Write-Host $user.ToJson()
-        
-    } else {
-        Write-Host "No ha introducido un Identificador valido"
-        }
-    Write-Host ""
-        
+    Write-Host "" 
     Read-Host -Prompt 'Pulse Intro para continuar'
 }
 Function UpdateDniByUser{
@@ -97,12 +98,7 @@ Function UpdateDniByUser{
 
         if($employeeId -ne $null -and $employeeId -ne ""){
             
-            if ($employeeId.length -ne 8 ){
-                $dni = ("00000000"+$employeeId)
-                $length = $dni.length
-                $dni = $dni.Substring($length-8, 8)
-                $employeeId = $dni
-            }
+            $employeeId = FormatDNI($employeeId)
 
             if (ExistsEmployeeId($employeeId) -eq $true){
                 Write-Warning -Message "El DNI ya existe asignado a un usuario"
@@ -112,11 +108,8 @@ Function UpdateDniByUser{
                 $extension.Add("employeeId", $employeeId)
 
                 Set-AzureADUser -ObjectId $userPrincipalName -ExtensionProperty $extension
-
-                FindUserByDistinguisedName($userPrincipalName)
-            
-                Write-Information "Actualizaci?n completada"
-                
+                Write-Host "Actualización completada" -ForegroundColor Green
+                Start-Sleep -seconds 1
             }
 
         }
@@ -135,7 +128,6 @@ Function UpdateUserByDistinguisedName{
     Read-Host -Prompt 'Pulse Intro para continuar'
 }
 
-
 function ComprobarCSV {
     param(
     [string]$CsvFilePath
@@ -153,6 +145,7 @@ function ComprobarCSV {
     $NewUsers = import-csv -Path $CsvFilePath -Encoding UTF8 -Delimiter ";"
 
     $i=0    
+    $Mensaje=""
 
     # Recorremos la colección de nuevos usuarios
     Foreach ($NewUser in $NewUsers) { 
@@ -177,7 +170,11 @@ function ComprobarCSV {
         $City = $NewUser.City
         $State = $NewUser.State
         $Country = $NewUser.Country
-        
+        $StandardPack = $NewUser.StandardPack
+        $FlowFree =  $NewUser.FlowFree
+
+        $EmployeeId = FormatDNI($EmployeeId)
+
         # Validamos que los campos requeridos tengan contenido
         if ($UserPrincipalName -eq "" -or $UserPrincipalName -eq $null -or $DisplayName -eq "" -or $DisplayName -eq $null -or $GivenName -eq "" -or $GivenName -eq $null -or
             $Surname -eq "" -or $Surname -eq $null -or $MailNickName -eq "" -or $MailNickName -eq $null -or $Department -eq "" -or $Department -eq $null -or
@@ -248,7 +245,7 @@ function ComprobarCSV {
                 $Mensaje="El JobTitle esta vacío"
                 OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
             }
-        
+        <#
             # Comprobaciones TelephoneNumber
             if ($TelephoneNumber -eq "" -or $TelephoneNumber -eq $null) {
                 $Mensaje="TelephoneNumber esta vacío"
@@ -266,11 +263,11 @@ function ComprobarCSV {
                 $Mensaje="StreetAddress esta vacío"
                 OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
             }
-
+        #>
             # Comprobaciones PostalCode
             if ($PostalCode -eq "" -or $PostalCode -eq $null) {
-                $Mensaje="PostalCode esta vacío"
-                OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
+                #$Mensaje="PostalCode esta vacío"
+                #OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
             }else{
                 # Comprobamos que el Código Postal tenga valores númericos
                 if($PostalCode -notmatch "^\d+$"){
@@ -296,10 +293,19 @@ function ComprobarCSV {
                 $Mensaje="Country esta vacío"
                 OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
             }         
+
+            if (!($StandardPack -eq "true" -or $StandardPack -eq "false")){
+                $Mensaje="StandardPack incorrecto"
+                OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
+            }
+            if (!($FlowFree -eq "true" -or $FlowFree -eq "false")){
+                $Mensaje="FlowFree incorrecto"
+                OutMensaje -NumLinea $i -Mensaje $Mensaje  -txtResultsPath $txtResultsTest
+            }
         }
     }
 
-    if ($Mensajes -eq ""){
+    if ($Mensaje -eq ""){
         return $true
     }else{
         return $false
@@ -327,7 +333,6 @@ Function ExistsUserPrincipalName($UserPrincipalName) {
     }
 }
 
-
 Function ExistsEmployeeId($EmployeeId) {
     # Devuelve un valor booleano en caso de existir el DNI-EmployeeId
     try{
@@ -341,8 +346,6 @@ Function ExistsEmployeeId($EmployeeId) {
     }
  
 }
-
-
 
 function CargaUsuariosCSV {
     param(
@@ -365,34 +368,36 @@ function CargaUsuariosCSV {
         Start-Sleep -Milliseconds 500
 
         $UserPrincipalName = $NewUser.UserPrincipalName.Trim()
-        $EmployeeId = $NewUser.EmployeeId.Trim()    
+        $EmployeeId = $NewUser.EmployeeId.Trim()
         $DisplayName = $NewUser.DisplayName.Trim()
         $GivenName = $NewUser.GivenName.Trim()
         $Surname = $NewUser.Surname.Trim()
         $MailNickName = $NewUser.MailNickName.Trim()
         $Department  = $NewUser.Department.Trim()
         $JobTitle = $NewUser.JobTitle.Trim()
-        $TelephoneNumber  = $NewUser.TelephoneNumber.Trim()
-        $PhysicalDeliveryOfficeName = $NewUser.PhysicalDeliveryOfficeName.Trim()
-        $StreetAddress = $NewUser.StreetAddress.Trim()
-        $PostalCode = $NewUser.PostalCode.Trim()
+        $TelephoneNumber  = $NewUser.TelephoneNumber
+        $PhysicalDeliveryOfficeName = $NewUser.PhysicalDeliveryOfficeName
+        $StreetAddress = $NewUser.StreetAddress
+        $PostalCode = $NewUser.PostalCode
         $City = $NewUser.City.Trim()
         $State = $NewUser.State.Trim()
         $Country = $NewUser.Country.Trim()
-             
-        # Rellemamos con 0 por la izquierda
-        if ($EmployeeId -ne ""){                        
-            $dni = ("00000000"+$EmployeeId)
-            $length = $dni.length
-            $dni = $dni.Substring($length-8, 8)
-        }
+        $StandardPack = $NewUser.StandardPack
+        $FlowFree =  $NewUser.FlowFree
             
+        $EmployeeId = FormatDNI($EmployeeId)
+                    
         # Preparamos una password aleatoria
         $PasswordProfile = New-Object -TypeName Microsoft.Open.AzureAD.Model.PasswordProfile
         $PasswordProfile.Password = Scramble-String($password)
         $PasswordProfile.ForceChangePasswordNextLogin = $true
         
- 
+        # El campo es requerido
+        if ($PhysicalDeliveryOfficeName -eq ""){$PhysicalDeliveryOfficeName = $null}
+        if ($PostalCode -eq ""){$PostalCode = $null}
+        if ($StreetAddress -eq ""){$StreetAddress = $null}
+        if ($TelephoneNumber -eq ""){$TelephoneNumber = $null}
+        
         # Creamos el usuario con los datos del csv
         New-AzureADUser  -AccountEnabled $true  -City $City -Country $Country -Department $Department -DisplayName $DisplayName -GivenName $GivenName -PasswordProfile $PasswordProfile `
             -JobTitle $JobTitle -PhysicalDeliveryOfficeName $PhysicalDeliveryOfficeName -PostalCode $PostalCode -PreferredLanguage "es-ES"  `
@@ -400,10 +405,10 @@ function CargaUsuariosCSV {
             
         
             # Agregamos las passwords al fichero de salida
-        $userPrincipalName+";"+$PasswordProfile.Password| Out-File -FilePath $CsvFilePass -Append
+        $UserPrincipalName+";"+$PasswordProfile.Password| Out-File -FilePath $CsvFilePass -Append
 
         # Cargamos el DNI del usuario en el objeto creado en la ExtensionProperty EmployeeId
-        $user = Get-AzureADUser -ObjectId $userPrincipalName 
+        $user = (Get-AzureADUser -ObjectId $UserPrincipalName)
         $ObjectId = $user.ObjectId
                         
         $extension = New-Object "System.Collections.Generic.Dictionary``2[System.String,System.String]"
@@ -415,21 +420,24 @@ function CargaUsuariosCSV {
 
         # Asignamos las licencias de Office365.
         # Es necesario recuperar el Id(SkuId) de la licencia a partir del literal de la misma para poder aignarsela al usuario
-        $planName="STANDARDPACK"
-        $License = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicense
-        $License.SkuId = (Get-AzureADSubscribedSku | Where-Object -Property SkuPartNumber -Value $planName -EQ).SkuID
-        $LicensesToAssign = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicenses
-        $LicensesToAssign.AddLicenses = $License
+        if ($StandardPack -eq "true"){
+            $planName="STANDARDPACK"
+            $License = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicense
+            $License.SkuId = (Get-AzureADSubscribedSku | Where-Object -Property SkuPartNumber -Value $planName -EQ).SkuID
+            $LicensesToAssign = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicenses
+            $LicensesToAssign.AddLicenses = $License
+            Set-AzureADUserLicense -ObjectId $ObjectId -AssignedLicenses $LicensesToAssign
+        }
 
-        Set-AzureADUserLicense -ObjectId $ObjectId -AssignedLicenses $LicensesToAssign
+        if ($FlowFree -eq "true"){
+            $planName="FLOW_FREE"
+            $License = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicense
+            $License.SkuId = (Get-AzureADSubscribedSku | Where-Object -Property SkuPartNumber -Value $planName -EQ).SkuID
+            $LicensesToAssign = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicenses
+            $LicensesToAssign.AddLicenses = $License
 
-        $planName="FLOW_FREE"
-        $License = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicense
-        $License.SkuId = (Get-AzureADSubscribedSku | Where-Object -Property SkuPartNumber -Value $planName -EQ).SkuID
-        $LicensesToAssign = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicenses
-        $LicensesToAssign.AddLicenses = $License
-
-        Set-AzureADUserLicense -ObjectId $ObjectId -AssignedLicenses $LicensesToAssign    
+            Set-AzureADUserLicense -ObjectId $ObjectId -AssignedLicenses $LicensesToAssign    
+        }
     }
 
 }
@@ -454,4 +462,15 @@ function  NewUsersCSV {
 
     Read-Host -Prompt 'Pulse Intro para continuar'
 
+}
+
+function FormatDNI($EmployeeId) {
+    # Rellemamos con 0 por la izquierda    
+    if ($EmployeeId -ne ""){                        
+        $dni = ("00000000"+$EmployeeId)
+        $length = $dni.length
+        $dni = $dni.Substring($length-9, 9)
+        $EmployeeId = $dni
+    }
+    return $EmployeeId
 }
